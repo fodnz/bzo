@@ -50,17 +50,22 @@ const createConnectionSupervisor = client => {
         if (stopped || connecting) return;
 
         connecting = true;
+        let failed = false;
 
         try {
             await client.connect();
         } catch (error) {
+            failed = true;
+
             logger.warn("whatsapp connection attempt failed", {
                 message: error instanceof Error ? error.message : String(error)
             });
-
-            scheduleReconnect("connect_error", null);
         } finally {
             connecting = false;
+        }
+
+        if (failed) {
+            scheduleReconnect("connect_error", null);
         }
     };
 
