@@ -1,7 +1,7 @@
 const formatBytes = bytes =>
     `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 
-const handler = async (m, jid, { client }) => {
+const handler = async (m, { client, jid }) => {
     const memory = process.memoryUsage();
 
     const message = [

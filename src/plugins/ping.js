@@ -1,4 +1,4 @@
-const handler = async (m, jid, { client }) => {
+const handler = async (m, { client, jid }) => {
     const start = performance.now();
 
     const sent = await client.message.send(jid, "...", {

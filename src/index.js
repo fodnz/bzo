@@ -41,30 +41,35 @@ const startClient = async () => {
         });
     });
 
-    await connection.start();
-
     let shuttingDown = false;
 
     const shutdown = async signal => {
         if (shuttingDown) return;
 
         shuttingDown = true;
-
         logger.info("shutting down", { signal });
 
-        await connection.stop();
-        await disposeHandler();
+        try {
+            await connection.stop();
+            await disposeHandler();
+            await store.destroy();
+        } catch (error) {
+            logger.error("shutdown failed", {
+                message: error instanceof Error ? error.message : String(error)
+            });
+
+            process.exitCode = 1;
+        }
     };
 
-    process.once("SIGINT", async () => {
-        await shutdown("SIGINT");
-        process.exit(0);
-    });
+    const handleSignal = signal => {
+        void shutdown(signal);
+    };
 
-    process.once("SIGTERM", async () => {
-        await shutdown("SIGTERM");
-        process.exit(0);
-    });
+    process.once("SIGINT", () => handleSignal("SIGINT"));
+    process.once("SIGTERM", () => handleSignal("SIGTERM"));
+
+    await connection.start();
 
     return client;
 };

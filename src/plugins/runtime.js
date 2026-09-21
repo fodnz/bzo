@@ -16,7 +16,7 @@ const formatUptime = seconds => {
     ].filter(Boolean).join(" ");
 };
 
-const handler = async (m, jid, { client }) => {
+const handler = async (m, { client, jid }) => {
     const message = [
         `Node.js: ${process.version}`,
         `V8: ${process.versions.v8}`,

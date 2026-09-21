@@ -1,11 +1,30 @@
-import { readdir, stat } from "node:fs/promises";
 import { watch } from "node:fs";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
 import config from "./config/config.js";
 import { logger } from "./config/logger.js";
 
 const pluginsPath = fileURLToPath(new URL("./plugins/", import.meta.url));
+const reloadDelayMs = 250;
+
+const getText = message =>
+    message?.conversation ??
+    message?.extendedTextMessage?.text ??
+    "";
+
+const getSender = event => {
+    const jid =
+        event.key?.participantAlt ??
+        event.key?.participant ??
+        event.key?.remoteJidAlt ??
+        event.key?.remoteJid;
+
+    return jid?.split("@")[0]?.split(":")[0] ?? "";
+};
+
+const getOwner = () => String(config.owner ?? "").replace(/\D/g, "");
 
 const validatePlugin = (handler, fileName) => {
     if (typeof handler !== "function") {
@@ -27,79 +46,80 @@ const validatePlugin = (handler, fileName) => {
     }
 };
 
-const loadPlugins = async currentRegistry => {
-    const entries = (await readdir(pluginsPath, { withFileTypes: true }))
-        .filter(entry => entry.isFile() && entry.name.endsWith(".js"))
-        .sort((a, b) => a.name.localeCompare(b.name));
+const loadPlugin = async (fileName, previous) => {
+    const filePath = join(pluginsPath, fileName);
+    const metadata = await stat(filePath);
 
-    const nextRegistry = new Map();
+    if (
+        previous?.filePath === filePath &&
+        previous.mtimeMs === metadata.mtimeMs &&
+        previous.size === metadata.size
+    ) {
+        return previous;
+    }
 
-    for (const entry of entries) {
-        const filePath = join(pluginsPath, entry.name);
-        const fileStat = await stat(filePath);
-        const currentPlugin = currentRegistry.get(entry.name);
+    const moduleUrl = pathToFileURL(filePath);
+    moduleUrl.searchParams.set("v", String(metadata.mtimeMs));
 
-        if (currentPlugin?.mtimeMs === fileStat.mtimeMs) {
-            nextRegistry.set(entry.name, currentPlugin);
-            continue;
-        }
+    const module = await import(moduleUrl.href);
+    const handler = module.default;
 
-        try {
-            const moduleUrl = `${pathToFileURL(filePath).href}?v=${fileStat.mtimeMs}`;
-            const module = await import(moduleUrl);
-            const handler = module.default;
+    validatePlugin(handler, fileName);
 
-            validatePlugin(handler, entry.name);
+    return Object.freeze({
+        fileName,
+        filePath,
+        mtimeMs: metadata.mtimeMs,
+        size: metadata.size,
+        handler
+    });
+};
 
-            nextRegistry.set(entry.name, {
-                handler,
-                mtimeMs: fileStat.mtimeMs
+const buildRegistry = async previousRegistry => {
+    await mkdir(pluginsPath, { recursive: true });
+
+    const files = (await readdir(pluginsPath, { withFileTypes: true }))
+        .filter(file => file.isFile() && file.name.endsWith(".js"))
+        .map(file => file.name)
+        .sort((a, b) => a.localeCompare(b));
+
+    const previousFiles = new Map(
+        previousRegistry.map(plugin => [plugin.fileName, plugin])
+    );
+
+    const plugins = await Promise.all(
+        files.map(fileName => loadPlugin(fileName, previousFiles.get(fileName)))
+    );
+
+    const commands = new Map();
+
+    for (const plugin of plugins) {
+        const key = plugin.handler.command.toString();
+
+        if (commands.has(key)) {
+            logger.warn("duplicate plugin command", {
+                command: key,
+                plugins: [commands.get(key), plugin.fileName]
             });
-
-            logger.info("plugin loaded", {
-                plugin: entry.name,
-                command: handler.command.toString(),
-                owner: handler.owner
-            });
-        } catch (error) {
-            logger.error("plugin load failed", {
-                plugin: entry.name,
-                message: error instanceof Error ? error.message : String(error)
-            });
-
-            if (currentPlugin) {
-                nextRegistry.set(entry.name, currentPlugin);
-            }
+        } else {
+            commands.set(key, plugin.fileName);
         }
     }
 
-    return nextRegistry;
+    return plugins;
 };
 
-const getText = message =>
-    message?.conversation ??
-    message?.extendedTextMessage?.text ??
-    "";
+const findPlugin = (plugins, text) => {
+    for (const plugin of plugins) {
+        const handler = plugin.handler;
 
-const getSender = event => {
-    const jid =
-        event.key?.participantAlt ??
-        event.key?.participant ??
-        event.key?.remoteJidAlt ??
-        event.key?.remoteJid;
-
-    return jid?.split("@")[0]?.split(":")[0] ?? "";
-};
-
-const findPlugin = (registry, text) => {
-    for (const plugin of registry.values()) {
-        plugin.handler.command.lastIndex = 0;
-        const match = plugin.handler.command.exec(text);
-        plugin.handler.command.lastIndex = 0;
+        handler.command.lastIndex = 0;
+        const match = handler.command.exec(text);
+        handler.command.lastIndex = 0;
 
         if (match) {
             return {
-                handler: plugin.handler,
+                plugin,
                 match
             };
         }
@@ -109,17 +129,75 @@ const findPlugin = (registry, text) => {
 };
 
 const registerHandler = async client => {
-    let registry = new Map();
+    let plugins = await buildRegistry([]);
     let reloadTimer = null;
-    let reloadChain = Promise.resolve();
+    let reloadPromise = null;
+    let reloadRequested = false;
+    let reloadReason = "initial";
+    let disposed = false;
 
-    try {
-        registry = await loadPlugins(registry);
-    } catch (error) {
-        logger.error("plugin discovery failed", {
+    const reloadPlugins = reason => {
+        reloadRequested = true;
+        reloadReason = reason;
+
+        if (reloadPromise) {
+            return reloadPromise;
+        }
+
+        reloadPromise = (async () => {
+            while (reloadRequested && !disposed) {
+                reloadRequested = false;
+                const reason = reloadReason;
+
+                try {
+                    const nextPlugins = await buildRegistry(plugins);
+                    plugins = nextPlugins;
+
+                    logger.info("plugins reloaded", {
+                        count: plugins.length,
+                        reason
+                    });
+                } catch (error) {
+                    logger.error("plugin reload failed", {
+                        reason,
+                        message:
+                            error instanceof Error ? error.message : String(error)
+                    });
+                }
+            }
+        })().finally(() => {
+            reloadPromise = null;
+        });
+
+        return reloadPromise;
+    };
+
+    const scheduleReload = reason => {
+        if (disposed) return;
+
+        if (reloadTimer) {
+            clearTimeout(reloadTimer);
+        }
+
+        reloadTimer = setTimeout(() => {
+            reloadTimer = null;
+            void reloadPlugins(reason);
+        }, reloadDelayMs);
+    };
+
+    const watcher = watch(pluginsPath, (eventType, fileName) => {
+        const name = fileName?.toString();
+
+        if (name && !name.endsWith(".js")) return;
+
+        scheduleReload(name ? `${eventType}:${name}` : eventType);
+    });
+
+    watcher.on("error", error => {
+        logger.error("plugin watcher failed", {
             message: error instanceof Error ? error.message : String(error)
         });
-    }
+    });
 
     const onMessage = async event => {
         const text = getText(event.message).trim();
@@ -128,20 +206,25 @@ const registerHandler = async client => {
         if (!jid) return;
 
         const sender = getSender(event);
-        const isOwner = sender === config.owner;
+        const owner = getOwner();
+        const isOwner =
+            owner.length > 0 &&
+            sender.replace(/\D/g, "") === owner;
 
         if (config.self && !isOwner) return;
 
+        const registry = plugins;
         const result = findPlugin(registry, text);
 
         if (!result) return;
 
-        const { handler, match } = result;
+        const { plugin, match } = result;
+        const handler = plugin.handler;
 
         if (handler.owner && !isOwner) return;
 
         try {
-            await handler(event, jid, {
+            await handler(event, {
                 client,
                 jid,
                 sender,
@@ -151,48 +234,34 @@ const registerHandler = async client => {
             });
         } catch (error) {
             logger.error("plugin execution failed", {
+                plugin: plugin.fileName,
                 command: handler.command.toString(),
                 message: error instanceof Error ? error.message : String(error)
             });
         }
     };
 
-    const reloadPlugins = () => {
-        reloadChain = reloadChain
-            .then(async () => {
-                const nextRegistry = await loadPlugins(registry);
-                registry = nextRegistry;
-            })
-            .catch(error => {
-                logger.error("plugin reload failed", {
-                    message: error instanceof Error ? error.message : String(error)
-                });
-            });
-
-        return reloadChain;
-    };
-
-    const scheduleReload = () => {
-        clearTimeout(reloadTimer);
-
-        reloadTimer = setTimeout(() => {
-            reloadTimer = null;
-            void reloadPlugins();
-        }, 150);
-    };
-
-    const watcher = watch(pluginsPath, { persistent: false }, (_eventType, fileName) => {
-        if (!fileName || !String(fileName).endsWith(".js")) return;
-        scheduleReload();
-    });
-
     client.on("message", onMessage);
 
+    logger.info("plugins loaded", {
+        count: plugins.length
+    });
+
     return async () => {
-        clearTimeout(reloadTimer);
-        watcher.close();
-        await reloadChain;
+        disposed = true;
+
         client.off("message", onMessage);
+
+        if (reloadTimer) {
+            clearTimeout(reloadTimer);
+            reloadTimer = null;
+        }
+
+        watcher.close();
+
+        if (reloadPromise) {
+            await reloadPromise;
+        }
     };
 };
 
