@@ -11,7 +11,7 @@ const startClient = async () => {
         logger
     });
 
-    registerHandler(client);
+    await registerHandler(client);
 
     client.on("auth_qr", async () => {
         try {

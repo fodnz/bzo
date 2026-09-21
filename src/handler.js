@@ -1,4 +1,48 @@
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import config from "./config/config.js";
+import { logger } from "./config/logger.js";
+
+const pluginsPath = fileURLToPath(new URL("./plugins/", import.meta.url));
+
+const loadPlugins = async () => {
+    const files = (await readdir(pluginsPath, { withFileTypes: true }))
+        .filter(file => file.isFile() && file.name.endsWith(".js"))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    const plugins = await Promise.all(
+        files.map(async file => {
+            const module = await import(
+                pathToFileURL(join(pluginsPath, file.name)).href
+            );
+
+            const handler = module.default;
+
+            if (typeof handler !== "function") {
+                throw new TypeError(
+                    `Invalid plugin: ${file.name}. Default export must be a function.`
+                );
+            }
+
+            if (!(handler.command instanceof RegExp)) {
+                throw new TypeError(
+                    `Invalid plugin: ${file.name}. handler.command must be a RegExp.`
+                );
+            }
+
+            if (typeof handler.owner !== "boolean") {
+                throw new TypeError(
+                    `Invalid plugin: ${file.name}. handler.owner must be a boolean.`
+                );
+            }
+
+            return handler;
+        })
+    );
+
+    return plugins;
+};
 
 const getText = message =>
     message?.conversation ??
@@ -15,34 +59,37 @@ const getSender = event => {
     return jid?.split("@")[0]?.split(":")[0] ?? "";
 };
 
-const registerHandler = client => {
+const registerHandler = async client => {
+    const plugins = await loadPlugins();
+
     client.on("message", async event => {
-        const text = getText(event.message).trim().toLowerCase();
-
-        if (text !== "ping") return;
-
-        const sender = getSender(event);
-        const self = config.self === true || config.self === "true";
-
-        if (self && sender !== config.owner) return;
-
-        const jid = event.key.remoteJid;
+        const text = getText(event.message).trim();
+        const jid = event.key?.remoteJid;
 
         if (!jid) return;
 
-        const start = performance.now();
+        const sender = getSender(event);
+        const isOwner = sender === config.owner;
 
-        const sent = await client.message.send(jid, "...", {
-            quote: event
+        if (config.self && !isOwner) return;
+
+        const plugin = plugins.find(handler => {
+            handler.command.lastIndex = 0;
+            return handler.command.test(text);
         });
 
-        const ms = Math.round(performance.now() - start);
+        if (!plugin) return;
 
-        await client.message.send(jid, `${ms}ms`, {
-            editKey: {
-                id: sent.id
-            }
-        });
+        if (plugin.owner && !isOwner) return;
+
+        try {
+            await plugin(event, jid, { client });
+        } catch (error) {
+            logger.error("plugin execution failed", {
+                plugin: plugin.command.toString(),
+                message: error instanceof Error ? error.message : String(error)
+            });
+        }
     });
 };
 
