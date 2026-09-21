@@ -2,8 +2,8 @@ import config from "./config/config.js";
 import { createClient } from "./client.js";
 import { logger } from "./config/logger.js";
 import { store } from "./store.js";
-import registerHandler from "./handler.js";
-import { createConnectionSupervisor } from "./connection.js";
+import registerHandler from "./handler/index.js";
+import { createConnectionSupervisor } from "./connection/index.js";
 
 const startClient = async () => {
     const client = createClient({
