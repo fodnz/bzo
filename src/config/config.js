@@ -13,6 +13,9 @@ const config = Object.freeze({
     logLevel: getEnv("LOG_LEVEL"),
     serviceName: getEnv("SERVICE_NAME"),
 
+    owner: getEnv("OWNER"),
+    self: getEnv("SELF") === "true",
+
     path: Object.freeze({
         store: storePath
     }),
