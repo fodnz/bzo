@@ -14,7 +14,7 @@ const config = Object.freeze({
     serviceName: getEnv("SERVICE_NAME"),
 
     owner: getEnv("OWNER"),
-    self: getEnv("SELF") === "true",
+    self: getEnv("SELF"),
 
     path: Object.freeze({
         store: storePath
