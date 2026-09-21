@@ -3,6 +3,7 @@ import { createClient } from "./client.js";
 import { logger } from "./config/logger.js";
 import { store } from "./store.js";
 import registerHandler from "./handler.js";
+import { createConnectionSupervisor } from "./connection.js";
 
 const startClient = async () => {
     const client = createClient({
@@ -11,7 +12,8 @@ const startClient = async () => {
         logger
     });
 
-    await registerHandler(client);
+    const disposeHandler = await registerHandler(client);
+    const connection = createConnectionSupervisor(client);
 
     client.on("auth_qr", async () => {
         try {
@@ -39,7 +41,30 @@ const startClient = async () => {
         });
     });
 
-    await client.connect();
+    await connection.start();
+
+    let shuttingDown = false;
+
+    const shutdown = async signal => {
+        if (shuttingDown) return;
+
+        shuttingDown = true;
+
+        logger.info("shutting down", { signal });
+
+        await connection.stop();
+        await disposeHandler();
+    };
+
+    process.once("SIGINT", async () => {
+        await shutdown("SIGINT");
+        process.exit(0);
+    });
+
+    process.once("SIGTERM", async () => {
+        await shutdown("SIGTERM");
+        process.exit(0);
+    });
 
     return client;
 };
