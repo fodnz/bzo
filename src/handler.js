@@ -30,12 +30,18 @@ const registerHandler = client => {
 
         if (!jid) return;
 
-        const ms = event.timestampSeconds
-            ? Math.max(0, Date.now() - event.timestampSeconds * 1000)
-            : 0;
+        const start = performance.now();
+
+        const sent = await client.message.send(jid, "...", {
+            quote: event
+        });
+
+        const ms = Math.round(performance.now() - start);
 
         await client.message.send(jid, `${ms}ms`, {
-            quote: event
+            editKey: {
+                id: sent.id
+            }
         });
     });
 };
