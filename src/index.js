@@ -2,6 +2,7 @@ import config from "./config/config.js";
 import { createClient } from "./client.js";
 import { logger } from "./config/logger.js";
 import { store } from "./store.js";
+import registerHandler from "./handler.js";
 
 const startClient = async () => {
     const client = createClient({
@@ -9,6 +10,8 @@ const startClient = async () => {
         store,
         logger
     });
+
+    registerHandler(client);
 
     client.on("auth_qr", async () => {
         try {
