@@ -1,14 +1,8 @@
-import {
-    WA_DISCONNECT_REASONS
-} from "zapo-js/protocol";
+import { WA_DISCONNECT_REASONS } from "zapo-js/protocol";
 
-import { logger } from "../config/logger.js";
-import {
-    getReconnectDelayMs,
-    shouldReconnect
-} from "./policy.js";
+import { getReconnectDelayMs, shouldReconnect } from "./policy.js";
 
-const createConnectionSupervisor = client => {
+const createConnectionSupervisor = (client, logger) => {
     let started = false;
     let stopped = false;
     let connecting = false;
@@ -25,11 +19,7 @@ const createConnectionSupervisor = client => {
     const scheduleReconnect = (reason, code) => {
         if (stopped || connecting || reconnectTimer) return;
 
-        const delayMs = getReconnectDelayMs(
-            reason,
-            code,
-            reconnectAttempt
-        );
+        const delayMs = getReconnectDelayMs(reason, code, reconnectAttempt);
 
         reconnectAttempt += 1;
 
@@ -91,9 +81,7 @@ const createConnectionSupervisor = client => {
 
         if (!shouldReconnect(event)) {
             if (event.reason === WA_DISCONNECT_REASONS.FAILURE_CLIENT_TOO_OLD) {
-                logger.warn(
-                    "client_too_old recovery is handled by zapo-js"
-                );
+                logger.warn("client_too_old recovery is handled by zapo-js");
             } else if (event.isLogout) {
                 logger.error("whatsapp session logged out");
             }
@@ -153,10 +141,7 @@ const createConnectionSupervisor = client => {
         }
     };
 
-    return Object.freeze({
-        start,
-        stop
-    });
+    return Object.freeze({ start, stop });
 };
 
 export { createConnectionSupervisor };

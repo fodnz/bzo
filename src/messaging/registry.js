@@ -2,8 +2,6 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { logger } from "../config/logger.js";
-
 const pluginsPath = fileURLToPath(new URL("../plugins/", import.meta.url));
 
 const validatePlugin = (handler, fileName) => {
@@ -39,10 +37,7 @@ const loadPlugin = async (fileName, previous) => {
     }
 
     const moduleUrl = pathToFileURL(filePath);
-    moduleUrl.searchParams.set(
-        "v",
-        `${metadata.mtimeMs}-${metadata.size}`
-    );
+    moduleUrl.searchParams.set("v", `${metadata.mtimeMs}-${metadata.size}`);
 
     const module = await import(moduleUrl.href);
     const handler = module.default;
@@ -58,7 +53,7 @@ const loadPlugin = async (fileName, previous) => {
     });
 };
 
-const buildPluginRegistry = async previousRegistry => {
+const buildPluginRegistry = async (previousRegistry, logger) => {
     await mkdir(pluginsPath, { recursive: true });
 
     const files = (await readdir(pluginsPath, { withFileTypes: true }))
@@ -67,7 +62,6 @@ const buildPluginRegistry = async previousRegistry => {
         .sort((a, b) => a.localeCompare(b));
 
     const previousFiles = new Map(previousRegistry);
-
     const nextRegistry = new Map();
 
     for (const fileName of files) {
@@ -77,7 +71,7 @@ const buildPluginRegistry = async previousRegistry => {
         nextRegistry.set(fileName, plugin);
 
         if (plugin !== previous) {
-            logger.info("plugin loaded", {
+            logger?.info("plugin loaded", {
                 plugin: fileName,
                 command: plugin.handler.command.toString(),
                 owner: plugin.handler.owner
@@ -102,4 +96,20 @@ const buildPluginRegistry = async previousRegistry => {
     return nextRegistry;
 };
 
-export { buildPluginRegistry, pluginsPath };
+const findPlugin = (registry, text) => {
+    for (const plugin of registry.values()) {
+        const { handler } = plugin;
+
+        handler.command.lastIndex = 0;
+        const match = handler.command.exec(text);
+        handler.command.lastIndex = 0;
+
+        if (match) {
+            return { plugin, match };
+        }
+    }
+
+    return null;
+};
+
+export { buildPluginRegistry, findPlugin, pluginsPath };

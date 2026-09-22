@@ -1,6 +1,4 @@
-import { WaClient } from "zapo-js";
-
-const ClientOptions = Object.freeze({
+const clientOptions = Object.freeze({
     connectTimeoutMs: 15_000,
 
     deviceBrowser: "Chrome",
@@ -65,15 +63,4 @@ const ClientOptions = Object.freeze({
     }
 });
 
-const createClient = ({ sessionId, store, logger }) => {
-    return new WaClient(
-        {
-            ...ClientOptions,
-            store,
-            sessionId
-        },
-        logger
-    );
-};
-
-export { createClient };
+export { clientOptions };

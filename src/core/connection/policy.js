@@ -42,10 +42,7 @@ const getReconnectDelayMs = (reason, code, attempt) => {
         return 60_000;
     }
 
-    return Math.min(
-        30_000,
-        1_000 * 2 ** attempt
-    );
+    return Math.min(30_000, 1_000 * 2 ** attempt);
 };
 
 export { getReconnectDelayMs, shouldReconnect };
